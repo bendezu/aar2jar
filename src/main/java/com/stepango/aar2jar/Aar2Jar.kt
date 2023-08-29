@@ -3,22 +3,23 @@ package com.stepango.aar2jar
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.artifacts.Configuration
-import org.gradle.api.artifacts.transform.ArtifactTransform
+import org.gradle.api.artifacts.transform.InputArtifact
+import org.gradle.api.artifacts.transform.TransformAction
+import org.gradle.api.artifacts.transform.TransformOutputs
+import org.gradle.api.artifacts.transform.TransformParameters
 import org.gradle.api.artifacts.type.ArtifactTypeDefinition
+import org.gradle.api.file.FileSystemLocation
 import org.gradle.api.internal.artifacts.ArtifactAttributes.ARTIFACT_FORMAT
-import org.gradle.api.plugins.JavaBasePlugin
-import org.gradle.api.plugins.JavaPluginConvention
+import org.gradle.api.plugins.JavaPluginExtension
+import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.SourceSet
 import org.gradle.api.tasks.SourceSetContainer
 import org.gradle.kotlin.dsl.dependencies
 import org.gradle.kotlin.dsl.get
 import org.gradle.kotlin.dsl.getByType
 import org.gradle.kotlin.dsl.the
-import org.gradle.plugins.ide.idea.IdeaPlugin
 import org.gradle.plugins.ide.idea.model.IdeaModel
-import java.io.File
 import java.io.FileOutputStream
-import java.lang.IllegalArgumentException
 import java.util.zip.ZipFile
 
 class Aar2Jar : Plugin<Project> {
@@ -55,10 +56,9 @@ class Aar2Jar : Plugin<Project> {
         }
 
         project.dependencies {
-            registerTransform {
+            registerTransform(AarToJarTransform::class.java) {
                 from.attribute(ARTIFACT_FORMAT, "aar")
                 to.attribute(ARTIFACT_FORMAT, ArtifactTypeDefinition.JAR_TYPE)
-                artifactTransform(AarToJarTransform::class.java)
             }
         }
 
@@ -97,7 +97,7 @@ fun Configuration.baseConfiguration(project: Project, name: String, f: SourceSet
         attribute(ARTIFACT_FORMAT, ArtifactTypeDefinition.JAR_TYPE)
     }
     project.pluginManager.withPlugin("java") {
-        val sourceSets = project.the<JavaPluginConvention>().sourceSets
+        val sourceSets = project.the<JavaPluginExtension>().sourceSets
         sourceSets.withName(name, f)
     }
 }
@@ -106,23 +106,25 @@ fun SourceSetContainer.withName(name: String, f: SourceSet.() -> Unit) {
     this[name]?.apply { f(this) } ?: whenObjectAdded { if (this.name == name) f(this) }
 }
 
-class AarToJarTransform : ArtifactTransform() {
+abstract class AarToJarTransform : TransformAction<TransformParameters.None> {
 
-    override fun transform(input: File): List<File> {
-        val file = File(outputDirectory, input.name.replace(".aar", ".jar"))
+    @InputArtifact
+    abstract fun getInputArtifact(): Provider<FileSystemLocation?>?
+
+    override fun transform(outputs: TransformOutputs) {
+        val input = getInputArtifact()!!.get().asFile
+        val output = outputs.file(input.name.replace(".aar", ".jar"))
+
         ZipFile(input).use { zipFile ->
             zipFile.entries()
-                    .toList()
-                    .first { it.name == "classes.jar" }
-                    .let(zipFile::getInputStream)
-                    .use { input ->
-                        FileOutputStream(file).use { output ->
-                            input.copyTo(output)
-                        }
+                .toList()
+                .first { it.name == "classes.jar" }
+                .let(zipFile::getInputStream)
+                .use { input ->
+                    FileOutputStream(output).use { output ->
+                        input.copyTo(output)
                     }
+                }
         }
-
-        return listOf(file)
     }
-
 }
